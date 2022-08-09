@@ -1,0 +1,111 @@
+version: '2'
+
+services:
+    php:
+        build: ./${PHP_VERSION}
+        container_name: bx-php
+        volumes_from:
+            - source
+        links:
+            - db
+            - memcached
+        networks:
+            - bitrix
+        restart: always
+    web_server:
+        build: ./${WEB_SERVER_TYPE}
+        depends_on:
+            - source
+        volumes_from:
+            - source
+        ports:
+            - '${INTERFACE}:80:80'
+            - '${INTERFACE}:443:443'
+        links:
+            - php
+        networks:
+            - bitrix
+        restart: always
+    db:
+        build: ./${DB_SERVER_TYPE}
+        platform: linux/amd64
+        volumes_from:
+            - source
+        ports:
+            - '${INTERFACE}:3306:3306'
+        environment:
+            MYSQL_DATABASE: ${MYSQL_DATABASE}
+            MYSQL_USER: ${MYSQL_USER}
+            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+        command: mysqld --sql-mode=""
+        networks:
+            - bitrix
+        restart: always
+    memcached:
+        image: memcached:1.6.12-alpine
+        volumes_from:
+            - source
+        ports:
+            - '${INTERFACE}:11211:11211'
+        networks:
+            - bitrix
+        restart: always
+    adminer:
+        image: dockette/adminer:full
+        links:
+            - db:db
+        ports:
+            - '${INTERFACE}:8080:80'
+        environment:
+            UPLOAD: 1024M # upload_max_filesize, post_max_size
+        networks:
+            - bitrix
+    source:
+        image: alpine:latest
+        volumes:
+            - ./logs/${WEB_SERVER_TYPE}:/var/log/${WEB_SERVER_TYPE}
+            - ./logs/php:/var/log/php
+            - ./logs/db:/var/log/mysql
+            - ./logs/memcached:/var/log/memcached
+            - db:/var/lib/mysql
+            - cache:/var/lib/memcached
+            - ./www/html:/var/www/html
+            - ${SITE_PATH}:/var/www/bitrix
+            - /etc/localtime:/etc/localtime/:ro
+        networks:
+            - bitrix
+    mailhog:
+        image: mailhog/mailhog
+        container_name: mailhog
+        ports:
+            - "8025:8025"
+            - "1025:1025"
+        networks:
+            - bitrix
+
+    cronjobber:
+        image: docker:edge
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+        container_name: cronjobber
+        command: >
+            sh -c "
+            echo '* * * * * docker exec bx-php php -f /var/www/bitrix/bitrix/modules/main/tools/cron_events.php' > /etc/crontabs/root
+            && crond -f"
+        networks:
+            - bitrix
+
+volumes:
+    db:
+        driver: local
+    cache:
+        driver: local
+
+networks:
+    bitrix:
+        driver: bridge
+        ipam:
+            driver: default
+            config:
+                - subnet: 10.100.0.0/24
